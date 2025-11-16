@@ -1,7 +1,8 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-const API_KEY = process.env.API_KEY;
+// Ключ вставлен напрямую, чтобы исправить ошибку при деплое на Vercel
+const API_KEY = 'AIzaSyDWtpv39WEVxCjv7oPU9HxjBavnaQWlX9I';
 
 if (!API_KEY) {
   // This will be handled by the environment, but as a fallback for local dev.

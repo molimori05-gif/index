@@ -64,21 +64,20 @@ const App: React.FC = () => {
   }, [pages, siteUrl]);
 
   // Google API Initialization
-  useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://apis.google.com/js/api.js';
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      window.gapi.load('client', initGapiClient);
-    };
-    document.body.appendChild(script);
+  const initGapiClient = useCallback(async () => {
+    await window.gapi.client.init({
+      apiKey: API_KEY,
+      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/searchconsole/v1/rest'],
+    });
+    setGapiReady(true);
+  }, []);
 
-    const gsiScript = document.createElement('script');
-    gsiScript.src = 'https://accounts.google.com/gsi/client';
-    gsiScript.async = true;
-    gsiScript.defer = true;
-    gsiScript.onload = () => {
+  useEffect(() => {
+    const initializeGoogleApis = () => {
+      // Initialize GAPI client for Search Console API
+      window.gapi.load('client', initGapiClient);
+
+      // Initialize Google Identity Services client for OAuth
       window.tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES,
@@ -90,23 +89,30 @@ const App: React.FC = () => {
         },
       });
     };
-    document.body.appendChild(gsiScript);
 
-  }, []);
+    // The Google API scripts are loaded asynchronously from index.html.
+    // We need to wait for them to be available on the window object.
+    // A simple polling mechanism is robust for this purpose.
+    const intervalId = setInterval(() => {
+      if (window.gapi && window.google?.accounts?.oauth2) {
+        clearInterval(intervalId);
+        initializeGoogleApis();
+      }
+    }, 100); // Check every 100ms
 
-  const initGapiClient = async () => {
-    await window.gapi.client.init({
-      apiKey: API_KEY,
-      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/searchconsole/v1/rest'],
-    });
-    setGapiReady(true);
-  };
+    return () => clearInterval(intervalId); // Cleanup on unmount
+  }, [initGapiClient]);
+
 
   const handleAuthClick = () => {
-    if (window.gapi && window.gapi.client.getToken() === null) {
-      window.tokenClient.requestAccessToken({ prompt: 'consent' });
-    } else {
-       window.tokenClient.requestAccessToken({ prompt: '' });
+    if (window.tokenClient) {
+      if (window.gapi?.client?.getToken() === null) {
+        // Prompt the user to select an account and grant access.
+        window.tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        // Skip display of account chooser and grant button.
+        window.tokenClient.requestAccessToken({ prompt: '' });
+      }
     }
   };
 
@@ -125,7 +131,12 @@ const App: React.FC = () => {
         new URL(tempSiteUrl);
         setSiteUrl(tempSiteUrl);
     } catch {
-        alert("Please enter a valid site URL (e.g. https://example.com)");
+        // check for sc-domain: format
+        if (tempSiteUrl.startsWith('sc-domain:')) {
+            setSiteUrl(tempSiteUrl);
+        } else {
+            alert("Please enter a valid site URL (e.g. https://example.com) or a domain property (e.g. sc-domain:example.com)");
+        }
     }
   };
 
@@ -182,7 +193,7 @@ const App: React.FC = () => {
   
   const checkPageIndex = useCallback(async (id: string) => {
     const page = pages.find(p => p.id === id);
-    if (!page) return;
+    if (!page || !siteUrl) return;
 
     try {
       const response = await window.gapi.client.searchconsole.urlInspection.index.inspect({
@@ -196,8 +207,11 @@ const App: React.FC = () => {
       let newStatus = IndexingStatus.FAILED;
       if (verdict === 'PASS') {
           newStatus = IndexingStatus.INDEXED;
-      } else if (verdict === 'NEUTRAL') {
+      } else if (verdict === 'NEUTRAL' || verdict === 'UNKNOWN') {
           newStatus = IndexingStatus.PENDING; // Still processing or unknown
+      } else {
+          // Other statuses like 'FAIL' are considered FAILED
+          newStatus = IndexingStatus.FAILED;
       }
       
       console.log(`Status for ${page.url}:`, result);
